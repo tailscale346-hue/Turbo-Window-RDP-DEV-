@@ -110,4 +110,5 @@ jobs:
           $hdr=@{Authorization="Bearer $env:GH_TOKEN";Accept="application/vnd.github+json"}
           $body=@{ref="${{ github.ref_name }}";inputs=$payload}|ConvertTo-Json -Depth 20
           Invoke-WebRequest -Method POST -Uri $url -Headers $hdr -Body $body|Out-Null
+          Write-Host "➡️  Workflow 2 triggered. Cycles left: $next"          Invoke-WebRequest -Method POST -Uri $url -Headers $hdr -Body $body|Out-Null
           Write-Host "➡️  Workflow 2 triggered. Cycles left: $next"
