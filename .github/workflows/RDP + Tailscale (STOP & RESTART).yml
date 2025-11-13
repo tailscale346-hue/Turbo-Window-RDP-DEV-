@@ -3,14 +3,7 @@ name: RDP + Tailscale (STOP & RESTART)
 on:
   workflow_dispatch:
     inputs:
-      ts_tailnet:      { description: "Tailscale tailnet", required: true }
-      ts_api_key:      { description: "Tailscale API key", required: true }
-      ts_authkey:      { description: "Tailscale Auth key", required: true }
-      quick_test:      { description: "Restart with 5-min test", type: boolean, default: false }
-      runtime_minutes: { description: "Runtime for restart", required: false, default: "355" }
-      do_purge:        { description: "Purge bullet devices", required: false, default: "true" }
-      rdp_count:       { description: "RDP instance count", required: false, default: "1" }
-      cycles_left:     { description: "Cycles remaining", required: true }
+      cycles_left: { description: "Cycles remaining", required: true }
 
 permissions:
   contents: read
@@ -23,12 +16,14 @@ defaults:
 jobs:
   stop-and-restart:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Purge bullet* devices
+      - name: Purge bullet devices
         run: |
           try{
-            $auth=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${{ inputs.ts_api_key }}:"))
-            $tn=[uri]::EscapeDataString("${{ inputs.ts_tailnet }}")
+            $auth=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${{ secrets.TS_API_KEY }}:"))
+            $tn=[uri]::EscapeDataString("${{ vars.TS_TAILNET }}")
+
             $list=Invoke-RestMethod "https://api.tailscale.com/api/v2/tailnet/$tn/devices" -Headers @{Authorization="Basic $auth"}
             $count=0
             foreach($d in $list.devices){
@@ -37,46 +32,52 @@ jobs:
                 $count++
               }
             }
-            Write-Host "🧹 Removed $count bullet devices from Tailscale."
-          }catch{Write-Host "⚠️ Cleanup failed: $($_.Exception.Message)"}
+            Write-Host "🧹 Removed $count bullet devices."
+          }catch{
+            Write-Host "⚠️ Cleanup failed: $($_.Exception.Message)"
+          }
 
       - name: Decide next step
         id: next
         run: |
           $left=[int]"${{ inputs.cycles_left }}"
           if($left -le 0){
-            Write-Host "✅ 5 cycles completed. Stopping permanently."
-            "RESTART=0"|Out-File -Append $env:GITHUB_ENV
+            "RESTART=0" | Out-File -Append $env:GITHUB_ENV
           }else{
-            Write-Host "⏳ Waiting 20 min before restarting Workflow 1. Cycles left: $left"
-            "RESTART=1"|Out-File -Append $env:GITHUB_ENV
+            "RESTART=1" | Out-File -Append $env:GITHUB_ENV
           }
 
-      - name: Wait 20 minutes (if restarting)
+      - name: Wait 20 minutes
         if: env.RESTART == '1'
         run: |
           $end=(Get-Date).AddMinutes(20)
-          while((Get-Date) -lt $end){Write-Host ("🕒 Cooling down "+(Get-Date));Start-Sleep 60}
+          while((Get-Date) -lt $end){
+            Write-Host ("⏳ Cooling "+(Get-Date))
+            Start-Sleep 60
+          }
 
-      - name: Restart Workflow 1 (if cycles remain)
+      - name: Restart Workflow 1
         if: env.RESTART == '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $next=[int]"${{ inputs.cycles_left }}"-1
-          if($next -le 0){Write-Host "✅ Finished all cycles.";exit 0}
-          $payload=@{
-            ts_tailnet="${{ inputs.ts_tailnet }}"
-            ts_api_key="${{ inputs.ts_api_key }}"
-            ts_authkey="${{ inputs.ts_authkey }}"
-            quick_test="${{ inputs.quick_test }}"
-            runtime_minutes="${{ inputs.runtime_minutes }}"
-            do_purge="${{ inputs.do_purge }}"
-            rdp_count="${{ inputs.rdp_count }}"
-            cycles_left="$next"
+          $next=[int]"${{ inputs.cycles_left }}" - 1
+
+          if($next -le 0){
+            Write-Host "✅ All cycles complete."
+            exit 0
           }
+
+          $payload=@{
+            cycles_left="$next"
+            runtime_minutes="${{ vars.DEFAULT_RUNTIME }}"
+            rdp_count="${{ vars.DEFAULT_RDP_COUNT }}"
+            quick_test="false"
+          }
+
           $url="https://api.github.com/repos/${{ github.repository }}/actions/workflows/workflow-1.yml/dispatches"
           $hdr=@{Authorization="Bearer $env:GH_TOKEN";Accept="application/vnd.github+json"}
-          $body=@{ref="${{ github.ref_name }}";inputs=$payload}|ConvertTo-Json -Depth 20
-          Invoke-WebRequest -Method POST -Uri $url -Headers $hdr -Body $body|Out-Null
-          Write-Host "🚀 Workflow 1 restarted (cycles left: $next)"
+          $body=@{ref="${{ github.ref_name }}";inputs=$payload} | ConvertTo-Json -Depth 20
+
+          Invoke-WebRequest -Method POST -Uri $url -Headers $hdr -Body $body | Out-Null
+          Write-Host "🚀 Restarted Workflow 1 (cycles left: $next)"
